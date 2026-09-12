@@ -213,6 +213,7 @@ object Form1: TForm1
       DataController.Summary.FooterSummaryItems = <>
       DataController.Summary.SummaryGroups = <>
       OptionsView.ColumnAutoWidth = True
+      OptionsView.Footer = True
       object cxGrid1DBTableView1RecId: TcxGridDBColumn
         DataBinding.FieldName = 'RecId'
         Visible = False

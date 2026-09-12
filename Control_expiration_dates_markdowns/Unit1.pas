@@ -1,4 +1,4 @@
-unit Unit1;
+п»їunit Unit1;
 
 interface
 
@@ -68,7 +68,11 @@ type
       Sender: TObject);
     procedure btnCancelClick(Sender: TObject);
     procedure btnSaveClick(Sender: TObject);
+    procedure cxGrid1DBTableView1DataControllerSummaryAfterSummary(
+      ASender: TcxDataSummary);
   private
+    procedure SetupFooterSummaries;
+    procedure RecalcFooterSummaries;
     { Private declarations }
   public
     { Public declarations }
@@ -83,18 +87,13 @@ implementation
 
 procedure TForm1.btnCancelClick(Sender: TObject);
 begin
-  // 1. Отменяем и скрываем активный редактор в ячейке грида
   if cxGrid1DBTableView1.Controller.IsEditing then
     cxGrid1DBTableView1.Controller.EditingController.HideEdit(False);
 
-  // 2. Отменяем изменения на уровне буфера датасета
   if dxMemData1.Active and (dxMemData1.State in [dsEdit, dsInsert]) then
     dxMemData1.Cancel;
 
-  // 3. Заново загружаем чистые данные из базы
   btnLoadClick(Sender);
-
-  // 4. Перерисовываем представление
   cxGrid1DBTableView1.Invalidate(True);
 end;
 
@@ -104,7 +103,6 @@ var
   FieldName: string;
   SelectedIDs: string;
 begin
-  // 1. Собираем ID отмеченных категорий
   SelectedIDs := '';
   for i := 0 to cxCheckComboBox1.Properties.Items.Count - 1 do
   begin
@@ -116,13 +114,11 @@ begin
     end;
   end;
 
-  // 2. Настраиваем и выполняем процедуру
   OraStoredProc1.Close;
   OraStoredProc1.StoredProcName := 'PKG_EXPIRY_CONTROL.GET_BATCHES';
   OraStoredProc1.Prepare;
   OraStoredProc1.ParamByName('p_date').AsDate := cxDateEdit1.Date;
 
-  // Если ничего не выбрано — передаем NULL (выборка всех категорий)
   if SelectedIDs = '' then
     OraStoredProc1.ParamByName('p_category_ids').Clear
   else
@@ -130,7 +126,6 @@ begin
 
   OraStoredProc1.Open;
 
-  // 3. Очищаем TdxMemData и копируем новые строки
   dxMemData1.DisableControls;
   try
     dxMemData1.Close;
@@ -146,7 +141,6 @@ begin
 
   OraStoredProc1.Close;
 
-  // 4. Построение колонок грида при первом запуске
   if cxGrid1DBTableView1.ColumnCount = 0 then
   begin
     cxGrid1DBTableView1.DataController.CreateAllItems;
@@ -158,6 +152,8 @@ begin
         (FieldName = 'DISCOUNT_PERCENT') or (FieldName = 'IS_WRITE_OFF');
     end;
   end;
+
+  RecalcFooterSummaries;
 end;
 
 
@@ -167,56 +163,47 @@ var
 begin
   if not dxMemData1.Active or dxMemData1.IsEmpty then Exit;
 
-  // 1. Завершаем активный ввод в ячейке грида, если курсор остался там
   if cxGrid1DBTableView1.Controller.IsEditing then
     cxGrid1DBTableView1.DataController.Post;
 
-  // 2. Завершаем редактирование на уровне датасета
   if dxMemData1.State in [dsEdit, dsInsert] then
     dxMemData1.Post;
 
-  // 3. Создаем процедуру сохранения
   SaveProc := TOraStoredProc.Create(nil);
   try
     SaveProc.Session := OraSession1;
     SaveProc.StoredProcName := 'PKG_EXPIRY_CONTROL.SAVE_BATCH';
     SaveProc.Prepare;
 
-    // 4. Открываем транзакцию
     OraSession1.StartTransaction;
     try
-      dxMemData1.DisableControls; // Отключаем UI для максимальной скорости
+      dxMemData1.DisableControls;
       try
         dxMemData1.First;
         while not dxMemData1.Eof do
         begin
-          // Передаем параметры текущей партии
           SaveProc.ParamByName('p_batch_id').AsInteger := dxMemData1.FieldByName('BATCH_ID').AsInteger;
           SaveProc.ParamByName('p_discount_percent').AsFloat := dxMemData1.FieldByName('DISCOUNT_PERCENT').AsFloat;
           SaveProc.ParamByName('p_is_write_off').AsInteger := dxMemData1.FieldByName('IS_WRITE_OFF').AsInteger;
 
-          // Если меняли дату срока годности
           if SaveProc.FindParam('p_expiry_date') <> nil then
             SaveProc.ParamByName('p_expiry_date').AsDate := dxMemData1.FieldByName('EXPIRY_DATE').AsDateTime;
 
           SaveProc.Execute;
-
           dxMemData1.Next;
         end;
       finally
         dxMemData1.EnableControls;
       end;
 
-      // 5. Фиксируем изменения в базе
       OraSession1.Commit;
-      ShowMessage('Дані успішно збережено!');
+      ShowMessage('Р”Р°РЅС– СѓСЃРїС–С€РЅРѕ Р·Р±РµСЂРµР¶РµРЅРѕ!');
 
     except
       on E: Exception do
       begin
-        // Откатываем транзакцию в случае сбоя
         OraSession1.Rollback;
-        ShowMessage('Помилка при збереженні: ' + E.Message);
+        ShowMessage('РџРѕРјРёР»РєР° РїСЂРё Р·Р±РµСЂРµР¶РµРЅРЅС–: ' + E.Message);
         Exit;
       end;
     end;
@@ -224,7 +211,6 @@ begin
     SaveProc.Free;
   end;
 
-  // 6. Перечитываем свежие данные из базы и обновляем подсветку
   btnLoadClick(Sender);
 end;
 
@@ -243,7 +229,6 @@ begin
   DaysLeftVal := AViewInfo.GridRecord.Values[ColDaysLeft.Index];
   WriteOffVal := AViewInfo.GridRecord.Values[ColWriteOff.Index];
 
-  // Проверяем: либо дни ушли в минус, либо включен флаг списания (1)
   IsExpiredOrWriteOff := False;
 
   if not VarIsNull(DaysLeftVal) and (Integer(DaysLeftVal) < 0) then
@@ -252,17 +237,15 @@ begin
   if not VarIsNull(WriteOffVal) and (Integer(WriteOffVal) = 1) then
     IsExpiredOrWriteOff := True;
 
-  // 1. КРАСНЫЙ: Просрочено или Списание
   if IsExpiredOrWriteOff then
   begin
-    ACanvas.Brush.Color := $00C0C0FF; // Мягкий пастельный красный (BGR)
-    ACanvas.Font.Color  := clMaroon;  // Тёмно-красный текст
+    ACanvas.Brush.Color := $00C0C0FF;
+    ACanvas.Font.Color  := clMaroon;
     ACanvas.Font.Style  := [fsBold];
   end
-  // 2. ЖЕЛТЫЙ: Критический срок (0..2 дня) и еще не списан
   else if not VarIsNull(DaysLeftVal) and (Integer(DaysLeftVal) >= 0) and (Integer(DaysLeftVal) <= 2) then
   begin
-    ACanvas.Brush.Color := $00C8FFFF; // Мягкий пастельный желтый (BGR)
+    ACanvas.Brush.Color := $00C8FFFF;
     ACanvas.Font.Color  := clBlack;
     ACanvas.Font.Style  := [];
   end;
@@ -281,7 +264,6 @@ begin
 
   Discount := Double(Edit.EditValue);
 
-  // Валидация прямо на лету
   if Discount < 0 then Discount := 0;
   if Discount > 90 then Discount := 90;
 
@@ -291,6 +273,7 @@ begin
   dxMemData1.FieldByName('DISCOUNT_PERCENT').AsFloat := Discount;
   dxMemData1.FieldByName('FINAL_PRICE').AsFloat := SimpleRoundTo(BasePrice * (1.0 - (Discount / 100.0)), -2);
   dxMemData1.Post;
+  RecalcFooterSummaries;
 end;
 
 procedure TForm1.cxGrid1DBTableView1Editing(Sender: TcxCustomGridTableView;
@@ -304,30 +287,25 @@ begin
   DaysLeft := dxMemData1.FieldByName('DAYS_LEFT').AsInteger;
   IsWriteOff := dxMemData1.FieldByName('IS_WRITE_OFF').AsInteger;
 
-  // 1. Если дата контроля в прошлом — полный запрет правок
   if cxDateEdit1.Date < Date then
   begin
     AAllow := False;
     Exit;
   end;
 
-  // 2. Если товар уже просрочен (DAYS_LEFT < 0)
   if DaysLeft < 0 then
   begin
-    // Разрешаем менять только чекбокс списания
     if FieldName <> 'IS_WRITE_OFF' then
       AAllow := False;
     Exit;
   end;
 
-  // 3. Если срок еще в норме (> 2 дней) — уценка не требуется
   if (DaysLeft > 2) and (FieldName = 'DISCOUNT_PERCENT') then
   begin
     AAllow := False;
     Exit;
   end;
 
-  // 4. Если стоит галочка "Списание" — скидку менять нельзя
   if (IsWriteOff = 1) and (FieldName = 'DISCOUNT_PERCENT') then
     AAllow := False;
 end;
@@ -341,7 +319,6 @@ var
   NewDaysLeft: Integer;
 begin
   Edit := Sender as TcxCustomEdit;
-  // 1. Немедленно отдаем введенную дату из инплейс-редактора в грид
   Edit.PostEditValue;
 
   if VarIsNull(Edit.EditValue) then Exit;
@@ -349,16 +326,12 @@ begin
   NewExpiryDate := Trunc(VarToDateTime(Edit.EditValue));
   ControlDate   := Trunc(cxDateEdit1.Date);
 
-  // 2. Считаем новую разницу в днях
   NewDaysLeft := Trunc(NewExpiryDate) - Trunc(ControlDate);
 
-  // 3. Записываем в датасет
   dxMemData1.Edit;
   dxMemData1.FieldByName('EXPIRY_DATE').AsDateTime := NewExpiryDate;
   dxMemData1.FieldByName('DAYS_LEFT').AsInteger   := NewDaysLeft;
 
-  // Если дата ушла в прошлое относительно контроля — товар просрочен:
-  // автоматически включаем списание и сбрасываем цену в 0
   if NewDaysLeft < 0 then
   begin
     dxMemData1.FieldByName('IS_WRITE_OFF').AsInteger := 1;
@@ -368,8 +341,8 @@ begin
 
   dxMemData1.Post;
 
-  // 4. Мгновенная перерисовка всей таблицы для обновления цвета
   cxGrid1DBTableView1.Invalidate(False);
+  RecalcFooterSummaries;
 end;
 
 procedure TForm1.cxGrid1DBTableView1IS_WRITE_OFFPropertiesEditValueChanged(
@@ -379,7 +352,6 @@ var
   NewVal: Integer;
 begin
   Edit := Sender as TcxCustomEdit;
-  // 1. Немедленно отдаем введенное значение из редактора
   Edit.PostEditValue;
 
   if VarIsNull(Edit.EditValue) then
@@ -387,25 +359,123 @@ begin
   else
     NewVal := Integer(Edit.EditValue);
 
-  // 2. Обновляем поля в dxMemData
   dxMemData1.Edit;
   dxMemData1.FieldByName('IS_WRITE_OFF').AsInteger := NewVal;
 
   if NewVal = 1 then
   begin
-    // Если списано — обнуляем скидку и цену
     dxMemData1.FieldByName('DISCOUNT_PERCENT').AsFloat := 0;
     dxMemData1.FieldByName('FINAL_PRICE').AsFloat := 0;
   end
   else
   begin
-    // Если галочку сняли — возвращаем базовую цену
     dxMemData1.FieldByName('FINAL_PRICE').AsFloat := dxMemData1.FieldByName('BASE_PRICE').AsFloat;
   end;
   dxMemData1.Post;
 
-  // 3. ПРИНУДИТЕЛЬНО ПЕРЕРИСОВЫВАЕМ ГРИД
   cxGrid1DBTableView1.Invalidate(False);
+  RecalcFooterSummaries;
+end;
+
+procedure TForm1.cxGrid1DBTableView1DataControllerSummaryAfterSummary(
+  ASender: TcxDataSummary);
+var
+  I, RecIdx, ItemIdx: Integer;
+  RevenueSum, WriteOffSum: Double;
+  Qty, FinalPrice, BasePrice, IsWriteOff: Variant;
+  ColQty, ColFinal, ColBase, ColWO: Integer;
+  Item: TcxGridDBTableSummaryItem;
+begin
+  ColQty := cxGrid1DBTableView1QTY.Index;
+  ColFinal := cxGrid1DBTableView1FINAL_PRICE.Index;
+  ColBase := cxGrid1DBTableView1BASE_PRICE.Index;
+  ColWO := cxGrid1DBTableView1IS_WRITE_OFF.Index;
+
+  RevenueSum := 0;
+  WriteOffSum := 0;
+
+  for I := 0 to ASender.DataController.FilteredRecordCount - 1 do
+  begin
+    RecIdx := ASender.DataController.FilteredRecordIndex[I];
+
+    Qty := ASender.DataController.Values[RecIdx, ColQty];
+    FinalPrice := ASender.DataController.Values[RecIdx, ColFinal];
+    BasePrice := ASender.DataController.Values[RecIdx, ColBase];
+    IsWriteOff := ASender.DataController.Values[RecIdx, ColWO];
+
+    // Revenue after markdown: QTY * FINAL_PRICE
+    if not VarIsNull(Qty) and not VarIsNull(FinalPrice) then
+      RevenueSum := RevenueSum + Double(Qty) * Double(FinalPrice);
+
+    // Write-off cost: QTY * BASE_PRICE when IS_WRITE_OFF = 1
+    if not VarIsNull(IsWriteOff) and (Integer(IsWriteOff) = 1) then
+      if not VarIsNull(Qty) and not VarIsNull(BasePrice) then
+        WriteOffSum := WriteOffSum + Double(Qty) * Double(BasePrice);
+  end;
+
+  for ItemIdx := 0 to ASender.FooterSummaryItems.Count - 1 do
+  begin
+    Item := ASender.FooterSummaryItems[ItemIdx] as TcxGridDBTableSummaryItem;
+    if Item.Column = cxGrid1DBTableView1FINAL_PRICE then
+      ASender.FooterSummaryValues[ItemIdx] := SimpleRoundTo(RevenueSum, -2)
+    else if Item.Column = cxGrid1DBTableView1IS_WRITE_OFF then
+      ASender.FooterSummaryValues[ItemIdx] := SimpleRoundTo(WriteOffSum, -2);
+  end;
+end;
+
+procedure TForm1.SetupFooterSummaries;
+begin
+  cxGrid1DBTableView1.OptionsView.Footer := True;
+  cxGrid1DBTableView1.DataController.Summary.OnAfterSummary :=
+    cxGrid1DBTableView1DataControllerSummaryAfterSummary;
+
+  with cxGrid1DBTableView1.DataController.Summary do
+  begin
+    BeginUpdate;
+    try
+      FooterSummaryItems.Clear;
+
+      // PRODUCT_NAME вЂ” count of positions
+      with FooterSummaryItems.Add as TcxGridDBTableSummaryItem do
+      begin
+        Column := cxGrid1DBTableView1PRODUCT_NAME;
+        Kind := skCount;
+        Format := '0';
+      end;
+
+      // QTY вЂ” total stock
+      with FooterSummaryItems.Add as TcxGridDBTableSummaryItem do
+      begin
+        Column := cxGrid1DBTableView1QTY;
+        Kind := skSum;
+        Format := ',0.##';
+      end;
+
+      // FINAL_PRICE вЂ” QTY * FINAL_PRICE (custom in OnAfterSummary)
+      with FooterSummaryItems.Add as TcxGridDBTableSummaryItem do
+      begin
+        Column := cxGrid1DBTableView1FINAL_PRICE;
+        Kind := skSum;
+        Format := 'Р’РёСЂСѓС‡РєР°: ,0.00';
+      end;
+
+      // IS_WRITE_OFF вЂ” QTY * BASE_PRICE for write-offs (custom in OnAfterSummary)
+      with FooterSummaryItems.Add as TcxGridDBTableSummaryItem do
+      begin
+        Column := cxGrid1DBTableView1IS_WRITE_OFF;
+        Kind := skSum;
+        Format := 'РЎРїРёСЃР°РЅРЅСЏ: ,0.00';
+      end;
+    finally
+      EndUpdate;
+    end;
+  end;
+end;
+
+procedure TForm1.RecalcFooterSummaries;
+begin
+  if cxGrid1DBTableView1.OptionsView.Footer then
+    cxGrid1DBTableView1.DataController.Summary.Recalculate;
 end;
 
 procedure TForm1.dxMemData1BeforePost(DataSet: TDataSet);
@@ -415,13 +485,11 @@ begin
   BasePrice := DataSet.FieldByName('BASE_PRICE').AsFloat;
   Discount := DataSet.FieldByName('DISCOUNT_PERCENT').AsFloat;
 
-  // Валидация диапазона
   if Discount < 0.0 then
     Discount := 0.0
   else if Discount > 90.0 then
     Discount := 90.0;
 
-  // Применяем вычисленные значения
   if DataSet.FieldByName('IS_WRITE_OFF').AsInteger = 1 then
   begin
     DataSet.FieldByName('DISCOUNT_PERCENT').AsFloat := 0.0;
@@ -440,6 +508,7 @@ var
   Q: TOraQuery;
 begin
   cxDateEdit1.Date := Date;
+  SetupFooterSummaries;
 
   Q := TOraQuery.Create(nil);
   try
@@ -453,7 +522,7 @@ begin
       with cxCheckComboBox1.Properties.Items.Add do
       begin
         Description := Q.FieldByName('name').AsString;
-        Tag := Q.FieldByName('id').AsInteger; // Сохраняем ID категории
+        Tag := Q.FieldByName('id').AsInteger;
       end;
       Q.Next;
     end;
