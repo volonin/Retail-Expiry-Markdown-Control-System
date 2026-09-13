@@ -12,7 +12,8 @@ uses
   cxTextEdit, cxMaskEdit, cxLookupEdit, cxDBLookupEdit, cxDBLookupComboBox,
   cxGridLevel, cxClasses, cxGridCustomView, cxGridCustomTableView,
   cxGridTableView, cxGridDBTableView, cxGrid, Ora, dxmdaset, DBAccess, MemDS,
-  OraCall, cxCheckBox, cxCheckComboBox, cxSpinEdit, Math;
+  OraCall, cxCheckBox, cxCheckComboBox, cxSpinEdit, Math,
+  System.Generics.Collections;
 
 type
   TForm1 = class(TForm)
@@ -52,7 +53,9 @@ type
     cxGrid1DBTableView1FINAL_PRICE: TcxGridDBColumn;
     cxGrid1DBTableView1IS_WRITE_OFF: TcxGridDBColumn;
     cxCheckComboBox1: TcxCheckComboBox;
+    cxCheckComboBox2: TcxCheckComboBox;
     procedure FormCreate(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
     procedure btnLoadClick(Sender: TObject);
     procedure cxGrid1DBTableView1Editing(Sender: TcxCustomGridTableView;
       AItem: TcxCustomGridTableItem; var AAllow: Boolean);
@@ -70,9 +73,14 @@ type
     procedure btnSaveClick(Sender: TObject);
     procedure cxGrid1DBTableView1DataControllerSummaryAfterSummary(
       ASender: TcxDataSummary);
+    procedure cxCheckComboBox2PropertiesEditValueChanged(Sender: TObject);
   private
+    FOrigDiscount: TDictionary<Integer, Double>;
+    FOrigWriteOff: TDictionary<Integer, Integer>;
     procedure SetupFooterSummaries;
     procedure RecalcFooterSummaries;
+    procedure SnapshotOriginals;
+    function OdciNumberListLiteral(const AValues: TArray<Double>): string;
     { Private declarations }
   public
     { Public declarations }
@@ -135,6 +143,9 @@ begin
       dxMemData1.Delete;
 
     dxMemData1.CopyFromDataSet(OraStoredProc1);
+    SnapshotOriginals;
+    if not dxMemData1.IsEmpty then
+      dxMemData1.First;
   finally
     dxMemData1.EnableControls;
   end;
@@ -159,7 +170,11 @@ end;
 
 procedure TForm1.btnSaveClick(Sender: TObject);
 var
-  SaveProc: TOraStoredProc;
+  SaveSQL: TOraSQL;
+  Ids, Discounts, WriteOffs: TArray<Double>;
+  Cap, N, BatchId, WriteOff, OrigWO: Integer;
+  Discount, OrigDisc: Double;
+  NeedSave: Boolean;
 begin
   if not dxMemData1.Active or dxMemData1.IsEmpty then Exit;
 
@@ -169,36 +184,67 @@ begin
   if dxMemData1.State in [dsEdit, dsInsert] then
     dxMemData1.Post;
 
-  SaveProc := TOraStoredProc.Create(nil);
+  Cap := dxMemData1.RecordCount;
+  SetLength(Ids, Cap);
+  SetLength(Discounts, Cap);
+  SetLength(WriteOffs, Cap);
+  N := 0;
+
+  dxMemData1.DisableControls;
   try
-    SaveProc.Session := OraSession1;
-    SaveProc.StoredProcName := 'PKG_EXPIRY_CONTROL.SAVE_BATCH';
-    SaveProc.Prepare;
+    dxMemData1.First;
+    while not dxMemData1.Eof do
+    begin
+      BatchId := dxMemData1.FieldByName('BATCH_ID').AsInteger;
+      Discount := dxMemData1.FieldByName('DISCOUNT_PERCENT').AsFloat;
+      WriteOff := dxMemData1.FieldByName('IS_WRITE_OFF').AsInteger;
+
+      NeedSave := True;
+      if (FOrigDiscount <> nil) and (FOrigWriteOff <> nil) and
+         FOrigDiscount.TryGetValue(BatchId, OrigDisc) and
+         FOrigWriteOff.TryGetValue(BatchId, OrigWO) then
+        NeedSave := (not SameValue(Discount, OrigDisc, 1E-6)) or (WriteOff <> OrigWO);
+
+      if NeedSave then
+      begin
+        Ids[N] := BatchId;
+        Discounts[N] := Discount;
+        WriteOffs[N] := WriteOff;
+        Inc(N);
+      end;
+
+      dxMemData1.Next;
+    end;
+  finally
+    dxMemData1.EnableControls;
+  end;
+
+  if N = 0 then
+  begin
+    ShowMessage('Немає змін для збереження.');
+    Exit;
+  end;
+
+  SetLength(Ids, N);
+  SetLength(Discounts, N);
+  SetLength(WriteOffs, N);
+
+  // Один мережевий виклик. Літерали ODCINUMBERLIST надійні в ODAC Direct mode
+  // (bind nested table через AsTable там дає AV / nil).
+  SaveSQL := TOraSQL.Create(nil);
+  try
+    SaveSQL.Session := OraSession1;
+    SaveSQL.SQL.Text :=
+      'BEGIN PKG_EXPIRY_CONTROL.SAVE_BATCHES_BULK(' +
+      OdciNumberListLiteral(Ids) + ', ' +
+      OdciNumberListLiteral(Discounts) + ', ' +
+      OdciNumberListLiteral(WriteOffs) + '); END;';
 
     OraSession1.StartTransaction;
     try
-      dxMemData1.DisableControls;
-      try
-        dxMemData1.First;
-        while not dxMemData1.Eof do
-        begin
-          SaveProc.ParamByName('p_batch_id').AsInteger := dxMemData1.FieldByName('BATCH_ID').AsInteger;
-          SaveProc.ParamByName('p_discount_percent').AsFloat := dxMemData1.FieldByName('DISCOUNT_PERCENT').AsFloat;
-          SaveProc.ParamByName('p_is_write_off').AsInteger := dxMemData1.FieldByName('IS_WRITE_OFF').AsInteger;
-
-          if SaveProc.FindParam('p_expiry_date') <> nil then
-            SaveProc.ParamByName('p_expiry_date').AsDate := dxMemData1.FieldByName('EXPIRY_DATE').AsDateTime;
-
-          SaveProc.Execute;
-          dxMemData1.Next;
-        end;
-      finally
-        dxMemData1.EnableControls;
-      end;
-
+      SaveSQL.Execute;
       OraSession1.Commit;
-      ShowMessage('Дані успішно збережено!');
-
+      ShowMessage(Format('Дані успішно збережено! (%d записів)', [N]));
     except
       on E: Exception do
       begin
@@ -208,10 +254,65 @@ begin
       end;
     end;
   finally
-    SaveProc.Free;
+    SaveSQL.Free;
   end;
 
   btnLoadClick(Sender);
+end;
+
+procedure TForm1.cxCheckComboBox2PropertiesEditValueChanged(Sender: TObject);
+var
+  DaysCol, WriteOffCol: TcxGridDBColumn;
+  CriticalGroup: TcxFilterCriteriaItemList;
+  HasSelectedFilters: Boolean;
+begin
+  DaysCol := cxGrid1DBTableView1DAYS_LEFT;
+  WriteOffCol := cxGrid1DBTableView1IS_WRITE_OFF;
+
+  with cxGrid1DBTableView1.DataController.Filter do
+  begin
+    BeginUpdate;
+    try
+      Root.Clear;
+      // Если выбрано несколько пунктов — объединяем их через логическое ИЛИ (OR)
+      Root.BoolOperatorKind := fboOr;
+
+      HasSelectedFilters := False;
+
+      // 0: Тільки прострочені (DAYS_LEFT < 0)
+      if cxCheckComboBox2.States[0] = cbsChecked then
+      begin
+        Root.AddItem(DaysCol, foLess, 0, '< 0');
+        HasSelectedFilters := True;
+      end;
+
+      // 1: Тільки критичні (0 <= DAYS_LEFT <= 2 и товар еще не списан)
+      if cxCheckComboBox2.States[1] = cbsChecked then
+      begin
+        // Создаем подгруппу с условием И (AND): (0 <= DAYS_LEFT <= 2) AND (IS_WRITE_OFF = 0)
+        CriticalGroup := Root.AddItemList(fboAnd);
+        CriticalGroup.AddItem(DaysCol, foGreaterEqual, 0, '>= 0');
+        CriticalGroup.AddItem(DaysCol, foLessEqual, 2, '<= 2');
+        CriticalGroup.AddItem(WriteOffCol, foEqual, 0, '0');
+        HasSelectedFilters := True;
+      end;
+
+      // 2: Тільки до списання (IS_WRITE_OFF = 1)
+      if cxCheckComboBox2.States[2] = cbsChecked then
+      begin
+        Root.AddItem(WriteOffCol, foEqual, 1, '1');
+        HasSelectedFilters := True;
+      end;
+
+      // Если ни один чекбокс не выбран — фильтр выключен (показываем все строки)
+      Active := HasSelectedFilters;
+    finally
+      EndUpdate;
+    end;
+  end;
+
+  // Автоматический пересчет финансовых итогов в подвале под видимые строки
+  RecalcFooterSummaries;
 end;
 
 procedure TForm1.cxGrid1DBTableView1CustomDrawCell(Sender: TcxCustomGridTableView;
@@ -507,6 +608,9 @@ procedure TForm1.FormCreate(Sender: TObject);
 var
   Q: TOraQuery;
 begin
+  FOrigDiscount := TDictionary<Integer, Double>.Create;
+  FOrigWriteOff := TDictionary<Integer, Integer>.Create;
+
   cxDateEdit1.Date := Date;
   SetupFooterSummaries;
 
@@ -529,6 +633,50 @@ begin
   finally
     Q.Free;
   end;
+end;
+
+procedure TForm1.FormDestroy(Sender: TObject);
+begin
+  FreeAndNil(FOrigDiscount);
+  FreeAndNil(FOrigWriteOff);
+end;
+
+procedure TForm1.SnapshotOriginals;
+var
+  BatchId: Integer;
+begin
+  FOrigDiscount.Clear;
+  FOrigWriteOff.Clear;
+
+  if not dxMemData1.Active then Exit;
+
+  dxMemData1.First;
+  while not dxMemData1.Eof do
+  begin
+    BatchId := dxMemData1.FieldByName('BATCH_ID').AsInteger;
+    FOrigDiscount.AddOrSetValue(BatchId, dxMemData1.FieldByName('DISCOUNT_PERCENT').AsFloat);
+    FOrigWriteOff.AddOrSetValue(BatchId, dxMemData1.FieldByName('IS_WRITE_OFF').AsInteger);
+    dxMemData1.Next;
+  end;
+end;
+
+function TForm1.OdciNumberListLiteral(const AValues: TArray<Double>): string;
+var
+  I: Integer;
+  FS: TFormatSettings;
+begin
+  FS := TFormatSettings.Create;
+  FS.DecimalSeparator := '.';
+  FS.ThousandSeparator := #0;
+
+  Result := 'SYS.ODCINUMBERLIST(';
+  for I := 0 to High(AValues) do
+  begin
+    if I > 0 then
+      Result := Result + ',';
+    Result := Result + FloatToStr(AValues[I], FS);
+  end;
+  Result := Result + ')';
 end;
 
 end.

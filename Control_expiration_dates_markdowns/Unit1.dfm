@@ -147,17 +147,17 @@ object Form1: TForm1
     0007000000070000000700000007000000078000000FF870707FF87870FF}
   OldCreateOrder = False
   OnCreate = FormCreate
+  OnDestroy = FormDestroy
   PixelsPerInch = 96
   TextHeight = 13
   object Panel1: TPanel
     Left = 0
     Top = 0
     Width = 1281
-    Height = 89
+    Height = 105
     Align = alTop
     BevelOuter = bvNone
     TabOrder = 2
-    ExplicitWidth = 818
     object btnLoad: TButton
       Left = 352
       Top = 27
@@ -186,24 +186,41 @@ object Form1: TForm1
       OnClick = btnCancelClick
     end
     object cxCheckComboBox1: TcxCheckComboBox
-      Left = 152
-      Top = 33
+      Left = 144
+      Top = 17
       Properties.EmptySelectionText = #1042#1080#1073#1077#1088#1110#1090#1100' '#1082#1072#1090#1077#1075#1086#1088#1110#1102
       Properties.Items = <>
       TabOrder = 3
       Width = 177
     end
+    object cxCheckComboBox2: TcxCheckComboBox
+      Left = 144
+      Top = 57
+      Properties.EmptySelectionText = #1060#1110#1083#1100#1090#1088#1072#1094#1110#1103' '#1079#1072' '#1082#1072#1090#1077#1075#1086#1088#1110#1108#1102
+      Properties.Items = <
+        item
+          Description = #1058#1110#1083#1100#1082#1080' '#1087#1088#1086#1089#1090#1088#1086#1095#1077#1085#1110' (< 0 '#1076#1085#1110#1074')'
+        end
+        item
+          Description = #1058#1110#1083#1100#1082#1080' '#1082#1088#1080#1090#1080#1095#1085#1110' (0..2 '#1076#1085#1110')'
+        end
+        item
+          Description = #1058#1110#1083#1100#1082#1080' '#1076#1086' '#1089#1087#1080#1089#1072#1085#1085#1103
+        end>
+      Properties.OnEditValueChanged = cxCheckComboBox2PropertiesEditValueChanged
+      TabOrder = 4
+      Width = 177
+    end
   end
   object cxGrid1: TcxGrid
     Left = 0
-    Top = 89
+    Top = 105
     Width = 1281
-    Height = 492
+    Height = 476
     Align = alClient
     TabOrder = 0
-    ExplicitTop = 88
-    ExplicitWidth = 817
-    ExplicitHeight = 369
+    ExplicitTop = 104
+    ExplicitHeight = 477
     object cxGrid1DBTableView1: TcxGridDBTableView
       Navigator.Buttons.CustomButtons = <>
       OnCustomDrawCell = cxGrid1DBTableView1CustomDrawCell
@@ -249,8 +266,6 @@ object Form1: TForm1
       object cxGrid1DBTableView1EXPIRY_DATE: TcxGridDBColumn
         Caption = #1044#1040#1058#1040' '#1058#1045#1056#1052#1030#1053#1059' '#1044#1030#1031
         DataBinding.FieldName = 'EXPIRY_DATE'
-        PropertiesClassName = 'TcxDateEditProperties'
-        Properties.OnEditValueChanged = cxGrid1DBTableView1EXPIRY_DATEPropertiesEditValueChanged
       end
       object cxGrid1DBTableView1DAYS_LEFT: TcxGridDBColumn
         Caption = #1047#1040#1051#1048#1064#1048#1051#1054#1057#1071' '#1044#1053#1030#1042
@@ -287,7 +302,7 @@ object Form1: TForm1
   end
   object cxDateEdit1: TcxDateEdit
     Left = 8
-    Top = 34
+    Top = 18
     TabOrder = 1
     Width = 121
   end
